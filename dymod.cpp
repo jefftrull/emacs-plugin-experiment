@@ -24,11 +24,13 @@ emacs_env * eenv;   // for use by our code
 // We create a Lisp function taking no arguments and returning nil
 // We call it from within C++, then give it a name so you can call it from Emacs
 // You can test all of this with a one-liner:
-// emacs -l ./libdymod.so -f dymod-sample-nullary-void-fn
+// emacs -l ./libdymod.so -f dymod-sample-nullary-void-fn --eval='(message "computed %d" (dymod-sample-unary-int-fn 8))'
 // it will print "Hello Elisp" twice on the console
+// and "computed 16" in the echo area
 
 // Our API
 void nullary_void_fn() { std::cout << "Hello Elisp\n"; }
+int  unary_int_fn(int i) { return 2*i; }
 
 int emacs_module_init(struct emacs_runtime *ert) {
     // get the current environment
@@ -65,8 +67,29 @@ int emacs_module_init(struct emacs_runtime *ert) {
 
     // now we can call our named function from within Emacs
 
+    // Let's try a more complicated example
+    emacs_value fn2 = eenv->make_function(eenv, 1, 1,
+                        [](emacs_env *env, ptrdiff_t, emacs_value args[] , void*) {
+                            int result = unary_int_fn(env->extract_integer(env, args[0]));
+                            return env->make_integer(env, result);
+                        },
+                        "An example binary int function bound from C++, that doubles its argument",
+                        nullptr);
+
+    // call it
+    emacs_value args2[]{eenv->make_integer(eenv, 3)};
+    retval = eenv->funcall(eenv, fn2, 1, args2);
+    assert(eenv->extract_integer(eenv, retval) == 6);  // doubled
+
+    // name it
+    emacs_value fname2 = eenv->intern(eenv, "dymod-sample-unary-int-fn");
+    emacs_value args3[]{fname2, fn2};
+    eenv->funcall(eenv, fset, 2, args3);
+
     return 0;
 }
+
+// if this symbol is not present Emacs will refuse to load the module
 void *plugin_is_GPL_compatible = nullptr;
 
 struct SomeClass {
