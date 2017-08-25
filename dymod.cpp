@@ -33,7 +33,7 @@ int  unary_int_fn(int i) { return 2*i; }
 
 struct SomeClass {
     SomeClass(std::string d) : data_(std::move(d)) {}
-    ~SomeClass() {}
+    ~SomeClass() { std::cout << data_ << " destroyed\n"; }
     void DoSomething() const { std::cout << data_ << "\n"; }
 private:
     std::string data_;
@@ -97,8 +97,14 @@ int emacs_module_init(struct emacs_runtime *ert) {
     // This is similar to the other functions but we need to get the "this" pointer
     // back so we know which object it applies to
 
-    auto foo = new SomeClass("Foo");   // yeah this will leak. TODO.
+    auto foo = new SomeClass("Foo");
+    auto foo_value = eenv->make_user_ptr(eenv,
+                                         [](void *p){ delete static_cast<SomeClass*>(p); },
+                                         foo);
     auto bar = new SomeClass("Bar");
+    /* auto bar_value = */ eenv->make_user_ptr(eenv,
+                                         [](void *p){ delete static_cast<SomeClass*>(p); },
+                                         bar);
 
     // a function to execute the DoSomething member of a SomeClass
     auto doer = [](emacs_env *env, ptrdiff_t, emacs_value [] , void* that) {
@@ -117,6 +123,20 @@ int emacs_module_init(struct emacs_runtime *ert) {
     // and call them
     eenv->funcall(eenv, foo_fn, 0, nullptr);
     eenv->funcall(eenv, bar_fn, 0, nullptr);
+
+    // To demonstrate finalizers, let's bind one of our SomeClass instances
+    // to a variable name - but not the other
+    emacs_value foo_symbol = eenv->intern(eenv, "dymod-sample-foo");
+
+    // we will need the set function
+    emacs_value set = eenv->intern(eenv, "set");
+
+    // perform the set
+    emacs_value args_for_set[]{foo_symbol, foo_value};
+    eenv->funcall(eenv, set, 2, args_for_set);
+
+    // now when garbage collection is performed only bar will be collected
+    // (and its destructor message "Bar destroyed" printed)
 
     return 0;
 }
