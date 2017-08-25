@@ -5,7 +5,7 @@
 #include <emacs-module.h>
 
 // signal to Emacs that we are libre
-extern void *plugin_is_GPL_compatible;
+void *plugin_is_GPL_compatible = nullptr;
 
 emacs_env * eenv;   // for use by our code
 
@@ -20,17 +20,24 @@ emacs_env * eenv;   // for use by our code
 // register "finalizer" (dtor) for user_ptr
 // get, set, and determine size of Emacs "vector"
 
-// Very rudimentary binding example, for now:
-// We create a Lisp function taking no arguments and returning nil
-// We call it from within C++, then give it a name so you can call it from Emacs
+// Very rudimentary binding example, for now.
 // You can test all of this with a one-liner:
 // emacs -l ./libdymod.so -f dymod-sample-nullary-void-fn --eval='(message "computed %d" (dymod-sample-unary-int-fn 8))'
 // it will print "Hello Elisp" twice on the console
+// "Foo" and "Bar" also (for the class instances)
 // and "computed 16" in the echo area
 
 // Our API
 void nullary_void_fn() { std::cout << "Hello Elisp\n"; }
 int  unary_int_fn(int i) { return 2*i; }
+
+struct SomeClass {
+    SomeClass(std::string d) : data_(std::move(d)) {}
+    ~SomeClass() {}
+    void DoSomething() const { std::cout << data_ << "\n"; }
+private:
+    std::string data_;
+};
 
 int emacs_module_init(struct emacs_runtime *ert) {
     // get the current environment
@@ -86,17 +93,31 @@ int emacs_module_init(struct emacs_runtime *ert) {
     emacs_value args3[]{fname2, fn2};
     eenv->funcall(eenv, fset, 2, args3);
 
+    // now a member function
+    // This is similar to the other functions but we need to get the "this" pointer
+    // back so we know which object it applies to
+
+    auto foo = new SomeClass("Foo");   // yeah this will leak. TODO.
+    auto bar = new SomeClass("Bar");
+
+    // a function to execute the DoSomething member of a SomeClass
+    auto doer = [](emacs_env *env, ptrdiff_t, emacs_value [] , void* that) {
+        static_cast<SomeClass*>(that)->DoSomething();
+        return env->intern(env, "nil");
+    };
+
+    // now bind it to the two different instances of SomeClass
+    emacs_value foo_fn = eenv->make_function(eenv, 0, 0, doer,
+                                             "calls foo's DoSomething method",
+                                             foo);
+    emacs_value bar_fn = eenv->make_function(eenv, 0, 0, doer,
+                                             "calls bar's DoSomething method",
+                                             bar);
+
+    // and call them
+    eenv->funcall(eenv, foo_fn, 0, nullptr);
+    eenv->funcall(eenv, bar_fn, 0, nullptr);
+
     return 0;
 }
 
-// if this symbol is not present Emacs will refuse to load the module
-void *plugin_is_GPL_compatible = nullptr;
-
-struct SomeClass {
-    SomeClass() {}
-    ~SomeClass() {}
-};
-
-// happens via ld, prior to emacs_module_init
-// will be destroyed when Emacs exits
-static SomeClass foo;
